@@ -14,7 +14,7 @@ program
 program
   .command('create <project-name>')
   .description('Create a new Stylus project from a template')
-  .option('-t, --template <template>', 'Template to use (erc20, erc721, vault, multisig, upgradeable)', 'erc20')
+  .option('-t, --template <template>', 'Template to use (erc20, erc721, vault)', 'erc20')
   .action(async (projectName: string, options: { template: string }) => {
     console.log(chalk.green(`\n✨ Creating Stylus project: ${projectName}`));
     console.log(chalk.blue(`📋 Template: ${options.template}\n`));
@@ -27,11 +27,10 @@ program
   .description('List available templates')
   .action(() => {
     console.log(chalk.green('\n📋 Available Templates:\n'));
-    console.log(chalk.blue('  • erc20       ') + chalk.white('- ERC20 Token (Production Ready ⭐⭐⭐⭐⭐)'));
-    console.log(chalk.gray('  • erc721      ') + chalk.gray('- ERC721 NFT (Coming Soon)'));
-    console.log(chalk.gray('  • vault       ') + chalk.gray('- Simple Vault (Coming Soon)'));
-    console.log(chalk.gray('  • multisig    ') + chalk.gray('- Multi-sig Wallet (Coming Soon)'));
-    console.log(chalk.gray('  • upgradeable ') + chalk.gray('- Upgradeable Contract (Coming Soon)\n'));
+    console.log(chalk.blue('  • erc20  ') + chalk.white('- ERC20 Token (12.7 KiB) ⭐⭐⭐⭐⭐'));
+    console.log(chalk.blue('  • erc721 ') + chalk.white('- ERC721 NFT (18.1 KiB) ⭐⭐⭐⭐⭐'));
+    console.log(chalk.blue('  • vault  ') + chalk.white('- Simple Vault (12.3 KiB) ⭐⭐⭐⭐⭐\n'));
+    console.log(chalk.gray('Usage: stylus-starter create my-project --template erc20\n'));
   });
 
 program.parse();

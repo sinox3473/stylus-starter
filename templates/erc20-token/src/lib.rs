@@ -1,19 +1,6 @@
-//! # Stylus ERC20 Token
+//! # Stylus ERC721 NFT
 //! 
-//! A production-ready, gas-optimized ERC20 token implementation in Rust.
-//! 
-//! ## Features
-//! - Full ERC20 standard compliance
-//! - Owner-based access control
-//! - Pausable transfers for emergency situations
-//! - Gas-optimized storage access
-//! - Detailed event logging
-//! 
-//! ## Security
-//! - No unchecked arithmetic (Rust prevents overflow)
-//! - Address validation on all transfers
-//! - Access control for privileged functions
-//! - Emergency pause mechanism
+//! A production-ready ERC721 (NFT) implementation in Rust.
 
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 #![cfg_attr(not(any(test, feature = "export-abi")), no_std)]
@@ -31,360 +18,195 @@ use stylus_sdk::{
     evm,
 };
 
-// ============================================================================
-// Events
-// ============================================================================
-
 sol! {
-    /// Emitted when tokens are transferred
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    
-    /// Emitted when allowance is set
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-    
-    /// Emitted when tokens are minted
-    event Mint(address indexed to, uint256 amount);
-    
-    /// Emitted when tokens are burned
-    event Burn(address indexed from, uint256 amount);
-    
-    /// Emitted when contract is paused
-    event Paused(address account);
-    
-    /// Emitted when contract is unpaused
-    event Unpaused(address account);
-    
-    /// Emitted when ownership is transferred
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
 }
-
-// ============================================================================
-// Storage
-// ============================================================================
 
 sol_storage! {
     #[entrypoint]
-    pub struct Erc20Token {
-        /// Token balances
+    pub struct Erc721Nft {
+        mapping(uint256 => address) owners;
         mapping(address => uint256) balances;
-        
-        /// Allowances: owner => spender => amount
-        mapping(address => mapping(address => uint256)) allowances;
-        
-        /// Total token supply
-        uint256 total_supply;
-        
-        /// Contract owner
+        mapping(uint256 => address) token_approvals;
+        mapping(address => mapping(address => bool)) operator_approvals;
         address owner;
-        
-        /// Pause state
-        bool paused;
+        uint256 next_token_id;
     }
 }
 
-// ============================================================================
-// ERC20 Implementation
-// ============================================================================
-
 #[public]
-impl Erc20Token {
-    // ------------------------------------------------------------------------
-    // Constructor
-    // ------------------------------------------------------------------------
-    
-    /// Initialize the token with an owner
-    /// Note: In Stylus, initialization happens via the first transaction
+impl Erc721Nft {
     pub fn initialize(&mut self) {
         let caller = self.vm().msg_sender();
-        
-        // Only initialize once
         if self.owner.get() == Address::ZERO {
             self.owner.set(caller);
+            self.next_token_id.set(U256::from(1));
         }
     }
     
-    // ------------------------------------------------------------------------
-    // View Functions
-    // ------------------------------------------------------------------------
-    
-    /// Returns the token name
     pub fn name() -> String {
-        String::from("Stylus Token")
-    }
-
-    /// Returns the token symbol
-    pub fn symbol() -> String {
-        String::from("STY")
-    }
-
-    /// Returns the number of decimals (18 is standard for ERC20)
-    pub fn decimals() -> u8 {
-        18
-    }
-
-    /// Returns the total token supply
-    pub fn total_supply(&self) -> U256 {
-        self.total_supply.get()
-    }
-
-    /// Returns the balance of an account
-    /// 
-    /// # Arguments
-    /// * `account` - The address to query
-    pub fn balance_of(&self, account: Address) -> U256 {
-        self.balances.get(account)
-    }
-
-    /// Returns the allowance for a spender
-    /// 
-    /// # Arguments
-    /// * `owner` - The token owner
-    /// * `spender` - The address allowed to spend
-    pub fn allowance(&self, owner: Address, spender: Address) -> U256 {
-        self.allowances.get(owner).get(spender)
+        String::from("Stylus NFT")
     }
     
-    /// Returns the contract owner
+    pub fn symbol() -> String {
+        String::from("SNFT")
+    }
+    
+    pub fn owner_of(&self, token_id: U256) -> Address {
+        let owner = self.owners.get(token_id);
+        assert!(owner != Address::ZERO, "Token does not exist");
+        owner
+    }
+    
+    pub fn balance_of(&self, owner: Address) -> U256 {
+        assert!(owner != Address::ZERO, "Invalid owner");
+        self.balances.get(owner)
+    }
+    
+    pub fn get_approved(&self, token_id: U256) -> Address {
+        assert!(self.exists(token_id), "Token does not exist");
+        self.token_approvals.get(token_id)
+    }
+    
+    pub fn is_approved_for_all(&self, owner: Address, operator: Address) -> bool {
+        self.operator_approvals.get(owner).get(operator)
+    }
+    
     pub fn owner(&self) -> Address {
         self.owner.get()
     }
     
-    /// Returns whether the contract is paused
-    pub fn paused(&self) -> bool {
-        self.paused.get()
+    pub fn total_supply(&self) -> U256 {
+        let next = self.next_token_id.get();
+        if next > U256::ZERO {
+            next - U256::from(1)
+        } else {
+            U256::ZERO
+        }
     }
-
-    // ------------------------------------------------------------------------
-    // State-Changing Functions
-    // ------------------------------------------------------------------------
-
-    /// Transfers tokens from caller to recipient
-    /// 
-    /// # Arguments
-    /// * `to` - Recipient address
-    /// * `amount` - Amount to transfer
-    /// 
-    /// # Panics
-    /// * If contract is paused
-    /// * If recipient is zero address
-    /// * If caller has insufficient balance
-    pub fn transfer(&mut self, to: Address, amount: U256) -> bool {
-        assert!(!self.paused.get(), "Contract is paused");
-        
-        let sender = self.vm().msg_sender();
-        self.transfer_impl(sender, to, amount);
+    
+    pub fn transfer_from(&mut self, from: Address, to: Address, token_id: U256) -> bool {
+        assert!(self.is_approved_or_owner(token_id), "Not authorized");
+        self.transfer_impl(from, to, token_id);
         true
     }
-
-    /// Approves a spender to transfer tokens on behalf of caller
-    /// 
-    /// # Arguments
-    /// * `spender` - Address to approve
-    /// * `amount` - Amount to approve
-    /// 
-    /// # Panics
-    /// * If spender is zero address
-    pub fn approve(&mut self, spender: Address, amount: U256) -> bool {
-        assert!(spender != Address::ZERO, "Invalid spender address");
+    
+    pub fn safe_transfer_from(&mut self, from: Address, to: Address, token_id: U256) -> bool {
+        self.transfer_from(from, to, token_id)
+    }
+    
+    pub fn approve(&mut self, to: Address, token_id: U256) {
+        let owner = self.owner_of(token_id);
+        let caller = self.vm().msg_sender();
         
-        let owner = self.vm().msg_sender();
+        assert!(
+            caller == owner || self.is_approved_for_all(owner, caller),
+            "Not authorized"
+        );
         
-        // Gas optimization: update allowance directly
-        self.allowances.setter(owner).insert(spender, amount);
+        self.token_approvals.insert(token_id, to);
         
         evm::log(Approval {
             owner,
-            spender,
-            value: amount,
+            approved: to,
+            tokenId: token_id,
         });
-        
-        true
     }
-
-    /// Transfers tokens from one address to another using allowance
-    /// 
-    /// # Arguments
-    /// * `from` - Token owner
-    /// * `to` - Recipient
-    /// * `amount` - Amount to transfer
-    /// 
-    /// # Panics
-    /// * If contract is paused
-    /// * If allowance is insufficient
-    pub fn transfer_from(&mut self, from: Address, to: Address, amount: U256) -> bool {
-        assert!(!self.paused.get(), "Contract is paused");
+    
+    pub fn set_approval_for_all(&mut self, operator: Address, approved: bool) {
+        let caller = self.vm().msg_sender();
+        assert!(operator != caller, "Cannot approve self");
         
-        let spender = self.vm().msg_sender();
+        self.operator_approvals.setter(caller).insert(operator, approved);
         
-        // Check allowance (gas optimization: read once)
-        let current_allowance = self.allowances.get(from).get(spender);
-        assert!(current_allowance >= amount, "Insufficient allowance");
-        
-        // Decrease allowance (gas optimization: direct write)
-        self.allowances.setter(from).insert(spender, current_allowance - amount);
-        
-        // Perform transfer
-        self.transfer_impl(from, to, amount);
-        
-        true
+        evm::log(ApprovalForAll {
+            owner: caller,
+            operator,
+            approved,
+        });
     }
-
-    // ------------------------------------------------------------------------
-    // Owner Functions
-    // ------------------------------------------------------------------------
-
-    /// Mints new tokens to an address (owner only)
-    /// 
-    /// # Arguments
-    /// * `to` - Recipient address
-    /// * `amount` - Amount to mint
-    /// 
-    /// # Panics
-    /// * If caller is not the owner
-    /// * If recipient is zero address
-    pub fn mint(&mut self, to: Address, amount: U256) {
+    
+    pub fn mint(&mut self, to: Address) -> U256 {
         let caller = self.vm().msg_sender();
         let owner = self.owner.get();
         assert!(caller == owner, "Only owner can mint");
         assert!(to != Address::ZERO, "Invalid recipient");
         
-        // Gas optimization: read balance once
-        let current_balance = self.balances.get(to);
-        self.balances.insert(to, current_balance + amount);
+        let token_id = self.next_token_id.get();
+        self.next_token_id.set(token_id + U256::from(1));
         
-        // Update total supply
-        let current_supply = self.total_supply.get();
-        self.total_supply.set(current_supply + amount);
+        self.mint_impl(to, token_id);
         
-        evm::log(Mint { to, amount });
+        token_id
+    }
+    
+    pub fn burn(&mut self, token_id: U256) {
+        assert!(self.is_approved_or_owner(token_id), "Not authorized");
+        
+        let owner = self.owners.get(token_id);
+        self.token_approvals.insert(token_id, Address::ZERO);
+        
+        let balance = self.balances.get(owner);
+        self.balances.insert(owner, balance - U256::from(1));
+        self.owners.insert(token_id, Address::ZERO);
+        
+        evm::log(Transfer {
+            from: owner,
+            to: Address::ZERO,
+            tokenId: token_id,
+        });
+    }
+}
+
+impl Erc721Nft {
+    fn exists(&self, token_id: U256) -> bool {
+        self.owners.get(token_id) != Address::ZERO
+    }
+    
+    fn is_approved_or_owner(&self, token_id: U256) -> bool {
+        let owner = self.owners.get(token_id);
+        if owner == Address::ZERO {
+            return false;
+        }
+        
+        let caller = self.vm().msg_sender();
+        caller == owner
+            || self.token_approvals.get(token_id) == caller
+            || self.is_approved_for_all(owner, caller)
+    }
+    
+    fn mint_impl(&mut self, to: Address, token_id: U256) {
+        let balance = self.balances.get(to);
+        self.balances.insert(to, balance + U256::from(1));
+        self.owners.insert(token_id, to);
         
         evm::log(Transfer {
             from: Address::ZERO,
             to,
-            value: amount,
+            tokenId: token_id,
         });
     }
     
-    /// Burns tokens from caller's balance
-    /// 
-    /// # Arguments
-    /// * `amount` - Amount to burn
-    /// 
-    /// # Panics
-    /// * If caller has insufficient balance
-    pub fn burn(&mut self, amount: U256) {
-        let caller = self.vm().msg_sender();
-        
-        // Check balance
-        let current_balance = self.balances.get(caller);
-        assert!(current_balance >= amount, "Insufficient balance");
-        
-        // Gas optimization: direct write
-        self.balances.insert(caller, current_balance - amount);
-        
-        // Update total supply
-        let current_supply = self.total_supply.get();
-        self.total_supply.set(current_supply - amount);
-        
-        evm::log(Burn {
-            from: caller,
-            amount,
-        });
-        
-        evm::log(Transfer {
-            from: caller,
-            to: Address::ZERO,
-            value: amount,
-        });
-    }
-    
-    /// Pauses all token transfers (owner only)
-    /// 
-    /// # Panics
-    /// * If caller is not the owner
-    pub fn pause(&mut self) {
-        let caller = self.vm().msg_sender();
-        let owner = self.owner.get();
-        assert!(caller == owner, "Only owner can pause");
-        
-        self.paused.set(true);
-        
-        evm::log(Paused { account: caller });
-    }
-    
-    /// Unpauses token transfers (owner only)
-    /// 
-    /// # Panics
-    /// * If caller is not the owner
-    pub fn unpause(&mut self) {
-        let caller = self.vm().msg_sender();
-        let owner = self.owner.get();
-        assert!(caller == owner, "Only owner can unpause");
-        
-        self.paused.set(false);
-        
-        evm::log(Unpaused { account: caller });
-    }
-    
-    /// Transfers ownership to a new address (owner only)
-    /// 
-    /// # Arguments
-    /// * `new_owner` - New owner address
-    /// 
-    /// # Panics
-    /// * If caller is not the owner
-    /// * If new owner is zero address
-    pub fn transfer_ownership(&mut self, new_owner: Address) {
-        let caller = self.vm().msg_sender();
-        let current_owner = self.owner.get();
-        assert!(caller == current_owner, "Only owner can transfer ownership");
-        assert!(new_owner != Address::ZERO, "Invalid new owner");
-        
-        self.owner.set(new_owner);
-        
-        evm::log(OwnershipTransferred {
-            previousOwner: current_owner,
-            newOwner: new_owner,
-        });
-    }
-}
-
-// ============================================================================
-// Internal Implementation
-// ============================================================================
-
-impl Erc20Token {
-    /// Internal transfer function with validations
-    /// 
-    /// Gas optimized: reads balances once, validates, then writes once
-    /// 
-    /// # Panics
-    /// * If recipient or sender is zero address
-    /// * If sender has insufficient balance
-    fn transfer_impl(&mut self, from: Address, to: Address, amount: U256) {
-        // Validate addresses
+    fn transfer_impl(&mut self, from: Address, to: Address, token_id: U256) {
         assert!(to != Address::ZERO, "Invalid recipient");
-        assert!(from != Address::ZERO, "Invalid sender");
+        assert!(self.owners.get(token_id) == from, "Not token owner");
         
-        // Gas optimization: read both balances once
-        let balance_from = self.balances.get(from);
-        let balance_to = self.balances.get(to);
+        self.token_approvals.insert(token_id, Address::ZERO);
         
-        // Check balance
-        assert!(balance_from >= amount, "Insufficient balance");
+        let from_balance = self.balances.get(from);
+        self.balances.insert(from, from_balance - U256::from(1));
         
-        // Update balances (gas optimization: direct writes)
-        self.balances.insert(from, balance_from - amount);
-        self.balances.insert(to, balance_to + amount);
+        let to_balance = self.balances.get(to);
+        self.balances.insert(to, to_balance + U256::from(1));
         
-        // Emit event
+        self.owners.insert(token_id, to);
+        
         evm::log(Transfer {
             from,
             to,
-            value: amount,
+            tokenId: token_id,
         });
     }
 }
-
-// ============================================================================
-// Tests
